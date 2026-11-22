@@ -8,7 +8,8 @@
     body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
     button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    dt { font-weight: 600; }
+    dd { margin: .25rem 0 1rem; white-space: pre-wrap; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -18,18 +19,64 @@
     <textarea id="message" rows="4"></textarea>
     <button type="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+  <p id="result" role="status"></p>
+  <dl id="details" hidden>
+    <dt>Тема</dt>
+    <dd id="topic"></dd>
+    <dt>Черновик ответа</dt>
+    <dd id="draft"></dd>
+  </dl>
   <script type="module">
     const form = document.querySelector("form");
+    const message = document.querySelector("#message");
     const result = document.querySelector("#result");
+    const details = document.querySelector("#details");
+    const topic = document.querySelector("#topic");
+    const draft = document.querySelector("#draft");
+    const topics = new Map([["delivery", "Доставка"], ["pricing", "Стоимость"], ["other", "Другое"]]);
+    let latestRequest = 0;
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+      const request = ++latestRequest;
+      details.hidden = true;
+      topic.textContent = "";
+      draft.textContent = "";
+      const text = message.value.trim();
+      if (!text) {
+        result.textContent = "Введите текст заявки.";
+        return;
+      }
+
+      result.textContent = "Разбираем заявку…";
+      try {
+        const reply = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+        const data = await reply.json();
+        if (request !== latestRequest) return;
+
+        if (reply.status === 400 && data?.status === "invalid_input") {
+          result.textContent = "Проверьте текст заявки и попробуйте ещё раз.";
+        } else if (reply.status === 200 && data?.status === "manual_review" &&
+                   data.topic === null && data.draft === null) {
+          result.textContent = "Разберите заявку вручную и подготовьте ответ клиенту.";
+        } else if (reply.status === 200 && data?.status === "ready" && topics.has(data.topic) &&
+                   typeof data.draft === "string" && data.draft.trim()) {
+          topic.textContent = topics.get(data.topic);
+          draft.textContent = data.draft;
+          details.hidden = false;
+          result.textContent = "Черновик готов. Проверьте его перед отправкой.";
+        } else {
+          throw new Error("Некорректный ответ API");
+        }
+      } catch {
+        if (request === latestRequest) {
+          result.textContent = "Не удалось разобрать заявку. Повторите попытку или разберите её вручную.";
+        }
+      }
     });
   </script>
 </body>
